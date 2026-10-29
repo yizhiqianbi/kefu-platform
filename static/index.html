@@ -1,0 +1,103 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, interactive-widget=resizes-content">
+<title>__TITLE__</title>
+<link rel="stylesheet" href="__S__chat.css?v=__V__">
+<script>window.MX_CFG = __CFG__;</script>
+</head>
+<body>
+<div class="layout">
+  <aside class="brandside" aria-label="关于我们">
+    <div class="bs-top"><div class="mark" aria-hidden="true"></div><span class="bs-name"></span></div>
+    <div class="bs-hero">
+      <p class="eyebrow" id="bsEyebrow"></p>
+      <h2 id="bsHeadline"></h2>
+      <p class="lead" id="bsLead"></p>
+    </div>
+    <dl class="facts" id="bsFacts"></dl>
+    <div class="bs-foot">
+      <p id="bsPhones"></p>
+      <p class="faint" id="bsNote"></p>
+    </div>
+  </aside>
+
+  <section class="pane">
+    <header class="top">
+      <div class="brand">
+        <div class="mark sm" aria-hidden="true"></div>
+        <div class="brand-text">
+          <h1><span class="m-only bs-name"></span><span class="d-only">在线咨询</span></h1>
+          <p class="status" id="status"><span class="dot"></span><span id="statusText">在线</span></p>
+        </div>
+      </div>
+      <div class="top-actions">
+        <button class="ghost-btn" id="newChat" type="button" title="新对话" aria-label="新对话"></button>
+        <button class="pill-btn" id="handoffBtn" type="button"></button>
+        <button class="ghost-btn embed-only" id="closeEmbed" type="button" title="收起" aria-label="收起"></button>
+      </div>
+    </header>
+
+    <div class="banner" id="offline" role="status" hidden></div>
+
+    <main class="thread" id="thread" aria-live="polite" aria-relevant="additions"></main>
+
+    <button class="jump" id="jump" type="button" hidden>回到最新</button>
+
+    <footer class="composer">
+      <form id="form" class="box" autocomplete="off">
+        <label class="sr-only" for="input">输入您的问题</label>
+        <textarea id="input" rows="1" placeholder="请输入您的问题…" enterkeyhint="send"></textarea>
+        <div class="box-side">
+          <span class="count" id="count" hidden></span>
+          <button class="send" id="send" type="submit" aria-label="发送" disabled></button>
+        </div>
+      </form>
+      <p class="fine" id="disclaimer"></p>
+    </footer>
+  </section>
+</div>
+
+<div class="sheet-wrap" id="sheet" hidden>
+  <div class="sheet-backdrop" data-close></div>
+  <section class="sheet" role="dialog" aria-modal="true" aria-labelledby="sheetTitle">
+    <button class="ghost-btn sheet-x" type="button" data-close aria-label="关闭"></button>
+    <div id="sheetForm">
+      <h2 id="sheetTitle">留个电话，同事给您回电</h2>
+      <p class="sheet-sub" id="sheetPhonesLine">着急的话可以直接打：<span id="sheetPhones"></span></p>
+      <form id="handoffForm" novalidate>
+        <label>怎么称呼 <span class="opt">选填</span>
+          <input name="name" maxlength="30" placeholder="如：王先生">
+        </label>
+        <label>手机号 <span class="req">必填</span>
+          <input name="phone" inputmode="tel" maxlength="20" placeholder="11 位手机号或带区号座机" required>
+          <span class="field-err" id="phoneErr"></span>
+        </label>
+        <label>想了解什么 <span class="opt">选填</span>
+          <textarea name="note" rows="3" maxlength="300" placeholder="具体需求、方便联系的时间都可以写上"></textarea>
+        </label>
+        <p class="form-err" id="handoffErr" role="alert"></p>
+        <p class="privacy">提交即表示同意我们用这个电话联系您，只用于本次咨询。</p>
+        <button class="primary" type="submit" id="handoffSubmit">提交</button>
+      </form>
+    </div>
+    <div id="sheetDone" hidden>
+      <div class="done-mark"></div>
+      <h2>已收到</h2>
+      <p class="sheet-sub">同事会尽快打给 <strong id="doneTel"></strong>。您也可以继续在这里提问。</p>
+      <button class="primary" type="button" data-close>好的</button>
+    </div>
+  </section>
+</div>
+
+<div class="paused" id="paused" hidden>
+  <div><div class="mark" aria-hidden="true"></div><h2>在线咨询暂停服务</h2><p id="pausedText"></p></div>
+</div>
+
+<div class="toast" id="toast" role="status" aria-live="polite"></div>
+
+<script src="__S__common.js?v=__V__"></script>
+<script src="__S__chat.js?v=__V__"></script>
+</body>
+</html>

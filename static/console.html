@@ -1,0 +1,74 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>客服运营台</title>
+<link rel="stylesheet" href="../static/console.css?v=__V__">
+</head>
+<body>
+<div id="login" class="login" hidden>
+  <form class="login-card" id="loginForm">
+    <div class="mark" aria-hidden="true">客</div>
+    <h1>智能客服 · 运营台</h1>
+    <p class="muted">用开通时收到的邮箱和密码登录</p>
+    <input type="email" name="email" id="loginEmail" autocomplete="username" placeholder="邮箱" required>
+    <input type="password" name="password" id="loginPw" autocomplete="current-password" placeholder="密码" required>
+    <p class="form-err" id="loginErr" role="alert"></p>
+    <button class="btn primary block" type="submit" id="loginBtn">登录</button>
+  </form>
+</div>
+
+<div id="shell" class="shell" hidden>
+  <aside class="side">
+    <div class="side-brand"><div class="mark sm" aria-hidden="true" id="sideMark">客</div><div><b id="sideName">运营台</b><span id="sideSub">运营台</span></div></div>
+    <div class="tenant-pick" id="tenantPick"></div>
+    <nav id="nav"></nav>
+    <div class="side-foot">
+      <a id="openSite" href="#" target="_blank" rel="noopener">打开咨询页 ↗</a>
+      <div class="who" id="who"></div>
+      <div class="side-links"><button type="button" class="link" id="changePw">修改密码</button><button type="button" class="link" id="logout">退出登录</button></div>
+    </div>
+  </aside>
+  <main class="main">
+    <div class="notice" id="pwNotice" hidden><span>你正在使用临时密码，请先改成自己的密码。</span><button class="btn sm" type="button" id="pwNoticeBtn">修改密码</button></div>
+    <header class="page-head"><h1 id="pageTitle"></h1><div class="page-actions" id="pageActions"></div></header>
+    <div id="page" class="page"></div>
+  </main>
+</div>
+
+<div class="drawer-wrap" id="drawer" hidden>
+  <div class="drawer-backdrop" data-close></div>
+  <section class="drawer" role="dialog" aria-modal="true" aria-labelledby="drawerTitle">
+    <header class="drawer-head">
+      <h2 id="drawerTitle"></h2>
+      <div class="drawer-nav">
+        <button type="button" class="btn ghost sm" id="drawerPrev" title="上一题（↑）">↑</button>
+        <button type="button" class="btn ghost sm" id="drawerNext" title="下一题（↓）">↓</button>
+        <button type="button" class="btn ghost sm" data-close title="关闭（Esc）">✕</button>
+      </div>
+    </header>
+    <div class="drawer-body" id="drawerBody"></div>
+  </section>
+</div>
+
+<div class="modal-wrap" id="modal" hidden>
+  <div class="modal-backdrop"></div>
+  <section class="modal" role="dialog" aria-modal="true" aria-labelledby="modalTitle">
+    <h2 id="modalTitle"></h2>
+    <div id="modalBody" class="modal-body"></div>
+    <p class="form-err" id="modalErr" role="alert"></p>
+    <div class="modal-actions">
+      <button type="button" class="btn" id="modalCancel">取消</button>
+      <button type="button" class="btn primary" id="modalOk">确定</button>
+    </div>
+  </section>
+</div>
+
+<input type="file" id="filePick" hidden multiple>
+<div class="toast" id="toast" role="status" aria-live="polite"></div>
+
+<script src="../static/common.js?v=__V__"></script>
+<script src="../static/console.js?v=__V__"></script>
+</body>
+</html>

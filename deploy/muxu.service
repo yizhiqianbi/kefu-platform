@@ -1,0 +1,12 @@
+[Unit]
+Description=智能客服平台
+After=network-online.target docker.service
+
+[Service]
+WorkingDirectory=/opt/kefu-platform
+ExecStart=/opt/kefu-platform/.venv/bin/uvicorn server:app --host 127.0.0.1 --port 8770 --workers 1
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

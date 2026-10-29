@@ -1,0 +1,43 @@
+diff --git a/conf/service_conf.yaml b/conf/service_conf.yaml
+index 31a288d..1e6ab29 100644
+--- a/conf/service_conf.yaml
++++ b/conf/service_conf.yaml
+@@ -1,7 +1,7 @@
+ general:
+   heartbeat_interval: 3s
+ ragflow:
+-  host: 0.0.0.0
++  host: 127.0.0.1
+   http_port: 9380
+   # Proxies whose X-Forwarded-For / X-Real-IP headers the Go API server trusts
+   # when resolving the client address (agent webhook ip_whitelist, login audit).
+@@ -33,7 +33,7 @@ deepdoc:
+ #   json_response: true # false streams Streamable HTTP responses.
+ 
+ admin:
+-  host: 0.0.0.0
++  host: 127.0.0.1
+   http_port: 9381
+ vastbase:
+   host: 'host.docker.internal'
+@@ -113,13 +113,13 @@ ingestor:
+   compiler_pool_size: 0
+ file_syncer:
+   max_concurrent_syncs: 5
+-user_default_llm:
+-  default_models:
+-    embedding_model:
+-      name: 'bge-m3'
+-      factory: 'xxxx'
+-      api_key: 'xxx'
+-      base_url: 'http://localhost:6380'
++# user_default_llm:
++#   default_models:
++#     embedding_model:
++#       name: 'bge-m3'
++#       factory: 'xxxx'
++#       api_key: 'xxx'
++#       base_url: 'http://localhost:6380'
+ gcs:
+   bucket: '${GCS_BUCKET:-ragflow}'
+   prefix_path: '${GCS_PREFIX_PATH:-}'
