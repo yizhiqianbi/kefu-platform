@@ -3,7 +3,7 @@ import json
 import time
 
 from sqlalchemy import (Boolean, Column, Float, ForeignKey, Integer, MetaData, PrimaryKeyConstraint, String, Table,
-                        Text, UniqueConstraint, create_engine, event, text)
+                        Text, UniqueConstraint, create_engine, event, inspect, text)
 
 import settings
 
@@ -173,6 +173,54 @@ gaps = Table(
     Column("updated", Float, nullable=False),
 )
 
+contacts = Table(
+    "contacts", meta,
+    Column("id", Integer, primary_key=True, autoincrement=True),
+    Column("tenant_id", Integer, ForeignKey("tenants.id", ondelete="CASCADE"), nullable=False, index=True),
+    Column("kind", String(16), nullable=False),                       # 达人 | B端客户 | 买家
+    Column("name", String(120), nullable=False),
+    Column("handle", String(120), nullable=False, default=""),        # TikTok @handle
+    Column("profile_url", String(300), nullable=False, default=""),
+    Column("country", String(60), nullable=False, default=""),
+    Column("language", String(30), nullable=False, default=""),
+    Column("followers", Integer, nullable=False, default=0),
+    Column("niche", String(120), nullable=False, default=""),
+    Column("company", String(120), nullable=False, default=""),
+    Column("last_order", Text, nullable=False, default=""),
+    Column("notes", Text, nullable=False, default=""),
+    Column("status", String(16), nullable=False, default="未联系"),
+    Column("followups", Integer, nullable=False, default=0),
+    Column("followup_at", Float),
+    Column("persona", Text, nullable=False, default=""),             # non-empty = 演练联系人, replies are role-played
+    Column("inbox_token", String(40), nullable=False, default=""),   # non-empty = 体验联系人, a person reads /muxu/inbox/{token}
+    Column("auto_send", Boolean, nullable=False, default=False),     # 体验联系人: send AI drafts without review
+    Column("created", Float, nullable=False),
+    Column("updated", Float, nullable=False),
+)
+
+outreach = Table(
+    "outreach", meta,
+    Column("id", Integer, primary_key=True, autoincrement=True),
+    Column("tenant_id", Integer, ForeignKey("tenants.id", ondelete="CASCADE"), nullable=False, index=True),
+    Column("contact_id", Integer, ForeignKey("contacts.id", ondelete="CASCADE"), nullable=False, index=True),
+    Column("scenario", String(16), nullable=False),                   # 达人建联 | 老客户复购 | 售后回访
+    Column("step", String(16), nullable=False),                       # 首次 | 跟进 | 回复 | 对方
+    Column("text", Text, nullable=False, default=""),
+    Column("note", Text, nullable=False, default=""),                 # AI's note to the reviewer
+    Column("needs_human", Boolean, nullable=False, default=False),
+    Column("status", String(16), nullable=False),                     # 生成中 | 待审核 | 待发送 | 已发送 | 已拒绝 | 失败 | 已收到
+    Column("created_by", String(60), nullable=False, default=""),
+    Column("approved_by", String(60), nullable=False, default=""),
+    Column("created", Float, nullable=False),
+    Column("sent_at", Float),
+)
+
+outreach_cfg = Table(
+    "outreach_cfg", meta,
+    Column("tenant_id", Integer, ForeignKey("tenants.id", ondelete="CASCADE"), primary_key=True),
+    Column("data", Text, nullable=False, default="{}"),
+)
+
 llm_usage = Table(
     "llm_usage", meta,
     Column("id", Integer, primary_key=True, autoincrement=True),
@@ -187,6 +235,14 @@ llm_usage = Table(
 
 def init():
     meta.create_all(engine)
+    # create_all never alters existing tables; add columns introduced after a table was first created.
+    have = {c["name"] for c in inspect(engine).get_columns("contacts")}
+    added = {"persona": "TEXT NOT NULL DEFAULT ''", "inbox_token": "VARCHAR(40) NOT NULL DEFAULT ''",
+             "auto_send": "BOOLEAN NOT NULL DEFAULT FALSE"}
+    with engine.begin() as c:
+        for name, ddl in added.items():
+            if name not in have:
+                c.execute(text(f"ALTER TABLE contacts ADD COLUMN {name} {ddl}"))
 
 
 def now():

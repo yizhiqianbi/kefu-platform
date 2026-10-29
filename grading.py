@@ -22,6 +22,24 @@ async def qa_pairs(tenant):
     return [c for c in out if c.strip()]
 
 
+DOCS_TRUTH_MAX = 30000
+
+
+async def docs_text(tenant):
+    docs_id = tenant["rag"].get("datasets", {}).get("docs")
+    if not docs_id:
+        return ""
+    out, size = [], 0
+    for d in await engine.list_docs(docs_id):
+        if not d["chunks"]:
+            continue
+        for c in await engine.list_chunks(docs_id, d["id"]):
+            if c.strip() and size < DOCS_TRUTH_MAX:
+                out.append(f"[{d['name']}] {c.strip()}")
+                size += len(c)
+    return "\n".join(out)[:DOCS_TRUTH_MAX]
+
+
 async def build_truth(tenant, fresh=False):
     hit = _truth_cache.get(tenant["id"])
     if hit and not fresh and time.time() - hit[0] < TRUTH_TTL:
@@ -32,6 +50,11 @@ async def build_truth(tenant, fresh=False):
         parts.append("【问答库（已启用的标准答案）】\n" + "\n".join(f"- {p}" for p in pairs))
     if tenant["truth_extra"].strip():
         parts.append(tenant["truth_extra"].strip())
+    else:
+        # Only without a curated fact sheet: curated tenants keep unverified material in their 资料库.
+        docs = await docs_text(tenant)
+        if docs:
+            parts.append("【资料库原文】\n" + docs)
     if tenant["rules"].strip():
         parts.append("【客服规则】\n" + tenant["rules"].strip())
     truth = "\n\n".join(parts) or "（这个客户还没有任何标准答案）"

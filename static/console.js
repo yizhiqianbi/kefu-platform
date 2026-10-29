@@ -21,6 +21,7 @@
       chat: { assistant: null, log: [], busy: null, prefill: "" },
       retrieve: { assistant: null, question: "", result: null },
       gapTab: "待处理", testType: "", testSearch: "", setTab: "brand",
+      out: { tab: "待审核", kind: "", status: "", search: "", picked: new Set(), contacts: [], msgs: [], cfg: null },
     };
   }
 
@@ -248,6 +249,7 @@
     chat: { title: "试聊", group: "t", render: renderChat },
     gaps: { title: "待补队列", group: "t", render: renderGaps, badge: "gaps" },
     handoffs: { title: "转人工", group: "t", render: renderHandoffs, badge: "handoffs" },
+    outreach: { title: "主动跟进", group: "t", render: renderOutreach, badge: "outreach" },
     settings: { title: "设置", group: "t", render: renderSettings },
     tenants: { title: "客户", group: "p", render: renderTenants },
     users: { title: "账号", group: "p", render: renderUsers },
@@ -374,7 +376,7 @@
 
   function updateBadges() {
     const c = S.ov?.counts || {};
-    const n = { gaps: c.gaps_open, handoffs: c.handoffs_new, runs: S.ov?.running?.length };
+    const n = { gaps: c.gaps_open, handoffs: c.handoffs_new, runs: S.ov?.running?.length, outreach: (c.outreach_review || 0) + (c.outreach_due || 0) };
     document.querySelectorAll("[data-badge]").forEach((b) => {
       const v = n[b.dataset.badge];
       b.hidden = !v;
@@ -1380,6 +1382,477 @@
       }
     }));
   }
+
+  // ---------- outreach (主动跟进) ----------
+
+  const OUT_TABS = [["待审核", "待审核"], ["待发送", "待发送"], ["待跟进", "待跟进"], ["联系人", "联系人"], ["记录", "发送记录"], ["设置", "外联要点"]];
+  const OUT_KINDS = ["达人", "B端客户", "买家"];
+  const OUT_SCENARIOS = ["达人建联", "老客户复购", "售后回访"];
+  const OUT_STATUS = ["未联系", "已联系", "已回复", "合作中", "已成交", "不再联系"];
+  const OUT_STATUS_TAG = { 未联系: "plain", 已联系: "warn", 已回复: "ok", 合作中: "ok", 已成交: "dark", 不再联系: "plain" };
+  const BRIEF_HINT = {
+    达人建联: "如：2026 帐篷空调 Space Cool-C11 免费寄样，佣金 15%，希望 30 天内发 1 条测评视频",
+    老客户复购: "如：旺季前 4 月底截止备货；新品 Space Cool 系列已上架，可以先寄样机",
+    售后回访: "如：收货 7–14 天后回访；提醒水满会自动停机；邀请在店铺留评价",
+  };
+  let outTimer = null;
+
+  async function renderOutreach(g) {
+    actions.innerHTML = `<a class="btn" href="${fileUrl("contacts/template.xlsx")}" download>下载名单模板</a>
+      <button class="btn" id="oimp">导入名单</button><button class="btn" id="osim">演练模式</button><button class="btn" id="oexp">以客户身份体验</button><button class="btn primary" id="oadd">添加联系人</button>`;
+    $("oimp").addEventListener("click", () => importContacts(g));
+    $("osim").addEventListener("click", () => loadSim(g));
+    $("oexp").addEventListener("click", () => startExperience(g));
+    $("oadd").addEventListener("click", () => editContact(null, g));
+    page.innerHTML = `<div class="tabs" id="otabs"></div><div id="obody">${loading(4)}</div>`;
+    await loadOutreach(g);
+  }
+
+  async function loadOutreach(g, poll = false) {
+    clearTimeout(outTimer);
+    try {
+      const [contacts, msgs, cfg] = await Promise.all([tc("contacts"), tc("outreach"), tc("outreach-settings")]);
+      if (stale(g)) return;
+      Object.assign(S.out, { contacts, msgs, cfg });
+    } catch (e) {
+      if (!stale(g) && !poll) $("obody").innerHTML = errorBox("读取失败：" + e.message, () => loadOutreach(g));
+      return;
+    }
+    if (poll && $("obody").querySelector(".dirty")) drawOutTabs(g);
+    else drawOutreach(g);
+    const busy = S.out.msgs.some((m) => m.status === "生成中") || S.out.contacts.some((c) => c.pending === "对方回复中");
+    // 体验联系人 can reply from the inbox page at any time.
+    if (busy || S.out.contacts.some((c) => c.exp)) {
+      outTimer = setTimeout(() => { if (!stale(g)) { loadOutreach(g, true); refreshOverview(); } }, busy ? 3000 : 5000);
+    }
+  }
+
+  function outCount(tab) {
+    const { msgs, contacts } = S.out;
+    if (tab === "待审核") return msgs.filter((m) => ["生成中", "待审核", "失败"].includes(m.status)).length;
+    if (tab === "待发送") return msgs.filter((m) => m.status === "待发送").length;
+    if (tab === "待跟进") return contacts.filter((c) => c.due).length;
+    if (tab === "联系人") return contacts.length;
+    if (tab === "记录") return msgs.filter((m) => ["已发送", "已拒绝"].includes(m.status)).length;
+    return "";
+  }
+
+  function drawOutTabs(g) {
+    $("otabs").innerHTML = OUT_TABS.map(([k, label]) => `<button class="${S.out.tab === k ? "on" : ""}" data-t="${k}">${label}${k === "设置" ? "" : ` <span class="faint num">${outCount(k)}</span>`}</button>`).join("");
+    $("otabs").querySelectorAll("[data-t]").forEach((b) => b.addEventListener("click", () => { S.out.tab = b.dataset.t; drawOutreach(g); }));
+  }
+
+  function drawOutreach(g) {
+    drawOutTabs(g);
+    const tab = S.out.tab;
+    const sims = S.out.contacts.filter((c) => c.sim).length;
+    document.querySelector(".o-sim")?.remove();
+    if (sims) $("otabs").insertAdjacentHTML("afterend", `<div class="o-sim"><b>演练中</b>标「模拟」的 ${sims} 位联系人不会真的收到消息：点「模拟发出」后，对方的回复由 AI 按人设扮演，几秒后出现在往来记录里，AI 会接着起草回复。</div>`);
+    if (tab === "待审核" || tab === "待发送") drawOutQueue(g, tab);
+    else if (tab === "待跟进") drawOutDue(g);
+    else if (tab === "联系人") drawContacts(g);
+    else if (tab === "记录") drawOutLog(g);
+    else drawOutCfg(g);
+  }
+
+  function outHead(m) {
+    return `<div class="gap-meta"><b class="o-name">${esc(m.name)}</b>${m.sim ? '<span class="tag warn">模拟</span>' : ""}${m.exp ? '<span class="tag warn">体验</span>' : ""}${m.handle ? `<span class="num">@${esc(m.handle)}</span>` : ""}
+      <span class="tag plain">${esc(m.kind)}</span>${m.country || m.language ? `<span>${esc([m.country, m.language].filter(Boolean).join(" · "))}</span>` : ""}
+      <span class="tag plain">${esc(m.scenario)} · ${esc(m.step)}</span><span>${esc(m.time_text)}</span>
+      ${m.needs_human ? '<span class="tag bad">需要人工</span>' : ""}<span class="grow"></span><button type="button" class="link" data-a="thread">往来记录</button></div>`;
+  }
+
+  function outCard(m) {
+    if (m.status === "生成中") {
+      return `<div class="card gap" data-id="${m.id}">${outHead(m)}<div class="muted" style="font-size:13.5px"><span class="spin"></span>AI 正在起草…</div></div>`;
+    }
+    if (m.status === "失败") {
+      return `<div class="card gap" data-id="${m.id}">${outHead(m)}<div class="gap-bot">${esc(m.note)}</div>
+        <div class="gap-actions"><span class="grow"></span><button class="btn sm ghost" data-a="reject">放弃</button><button class="btn sm primary" data-a="redraft">重新起草</button></div></div>`;
+    }
+    const ready = m.status === "待发送";
+    return `<div class="card gap" data-id="${m.id}">${outHead(m)}
+      <div class="draft"><textarea data-k="text" rows="5" maxlength="2000">${esc(m.text)}</textarea>
+        <div class="o-note"><span class="num cnt">${m.text.length} 字</span>${m.note ? `<span>AI 说明：${esc(m.note)}</span>` : ""}</div></div>
+      <div class="gap-actions">${ready ? `<span class="faint" style="font-size:12.5px">${esc(m.approved_by)} 已审核通过</span>` : ""}<span class="grow"></span>
+        ${ready ? (m.sim || m.exp ? `<button class="btn sm ghost" data-a="reject">撤回</button><button class="btn sm primary" data-a="sent">${m.exp ? "发到体验页" : "模拟发出"}</button>`
+          : '<button class="btn sm ghost" data-a="reject">撤回</button><button class="btn sm" data-a="open">复制并打开 TikTok</button><button class="btn sm primary" data-a="sent">我已发出</button>')
+          : '<button class="btn sm ghost" data-a="reject">不发</button><button class="btn sm" data-a="redraft">重新起草</button><button class="btn sm primary" data-a="approve">通过</button>'}
+      </div></div>`;
+  }
+
+  function drawOutQueue(g, tab) {
+    const list = S.out.msgs.filter((m) => (tab === "待审核" ? ["生成中", "待审核", "失败"] : ["待发送"]).includes(m.status));
+    if (!list.length) {
+      $("obody").innerHTML = tab === "待审核"
+        ? '<div class="card empty"><b>没有待审核的私信</b>到「联系人」勾选达人或客户，点「AI 起草私信」；对方回复后在「往来记录」里贴进来，AI 会起草回复</div>'
+        : '<div class="card empty"><b>没有待发送的私信</b>审核通过的私信会到这里，复制到 TikTok 发出后点「我已发出」</div>';
+      return;
+    }
+    $("obody").innerHTML = `<p class="legend">${tab === "待审核" ? "AI 起草的私信要人工看过才能发。可以直接改文字，改完点「通过」。"
+      : "点「复制并打开 TikTok」会复制文字并打开对方主页，在 TikTok 里粘贴发出后，回来点「我已发出」，系统会按设置的天数提醒跟进。"}</p>${list.map(outCard).join("")}`;
+    $("obody").querySelectorAll(".gap[data-id]").forEach((card) => bindOutCard(card, g));
+  }
+
+  function bindOutCard(card, g) {
+    const m = S.out.msgs.find((x) => x.id === Number(card.dataset.id));
+    const ta = card.querySelector('[data-k="text"]');
+    if (ta) {
+      ta.addEventListener("input", () => { ta.classList.add("dirty"); card.querySelector(".cnt").textContent = `${ta.value.length} 字`; });
+    }
+    const save = async () => {
+      if (!ta || !ta.classList.contains("dirty")) return;
+      if (!ta.value.trim()) throw new Error("私信不能为空");
+      Object.assign(m, await tc(`outreach/${m.id}`, { method: "PUT", body: { text: ta.value } }));
+      ta.classList.remove("dirty");
+    };
+    card.querySelectorAll("[data-a]").forEach((b) => b.addEventListener("click", async () => {
+      const a = b.dataset.a;
+      if (a === "thread") return openThread(m.contact_id, g);
+      b.disabled = true;
+      try {
+        if (a === "open") {
+          await save();
+          const ok = await copyText(ta.value.trim());
+          if (m.profile_url) window.open(m.profile_url, "_blank", "noopener");
+          toast(ok ? (m.profile_url ? "私信已复制，已打开对方主页" : "私信已复制；这位联系人没有主页链接") : "复制失败，请手动选中文字复制", !ok);
+          return;
+        }
+        if (a === "approve" || a === "sent") await save();
+        await tc(`outreach/${m.id}/${a}`, { method: "POST" });
+        const days = S.out.cfg?.followup_days?.[m.scenario];
+        const sentMsg = m.exp ? "已发到体验页" : m.sim ? "已模拟发出，对方正在回复…" : days ? `已记录，${days} 天后没回复会提醒跟进` : "已记录发送";
+        toast({ approve: "已通过，到「待发送」里发出", reject: "这条不发了", redraft: "正在重新起草", sent: sentMsg }[a]);
+        refreshOverview();
+        loadOutreach(g);
+      } catch (e) {
+        toast(e.message, true);
+      } finally {
+        b.disabled = false;
+      }
+    }));
+  }
+
+  function drawOutDue(g) {
+    const list = S.out.contacts.filter((c) => c.due);
+    if (!list.length) {
+      $("obody").innerHTML = '<div class="card empty"><b>现在没有要跟进的人</b>私信发出后，对方超过设置的天数没回复，会出现在这里</div>';
+      return;
+    }
+    $("obody").innerHTML = `<div class="o-bar"><span class="muted">${list.length} 位联系人发出私信后一直没回复。</span><span class="grow"></span>
+      <button class="btn primary sm" id="odueall">全部 AI 起草跟进</button></div>
+      <table class="t"><thead><tr><th style="width:190px">联系人</th><th style="width:96px">场景</th><th>上一条我方私信</th><th style="width:110px">已跟进</th><th style="width:110px"></th></tr></thead>
+      <tbody>${list.map((c) => `<tr data-c="${c.id}"><td><b>${esc(c.name)}</b>${c.handle ? `<div class="faint num">@${esc(c.handle)}</div>` : ""}</td>
+        <td>${esc(c.last?.scenario || "")}</td><td class="muted clamp" style="font-size:13px">${esc(c.last?.text || "")}<div class="faint">${esc(c.last?.at || "")}</div></td>
+        <td class="num">${c.followups} 次</td><td class="row-actions"><button class="btn sm" data-due="${c.id}">AI 写跟进</button></td></tr>`).join("")}</tbody></table>`;
+    $("odueall").addEventListener("click", () => outGenerate(list.map((c) => c.id), "", g));
+    $("obody").querySelectorAll("[data-due]").forEach((b) => b.addEventListener("click", (e) => { e.stopPropagation(); outGenerate([Number(b.dataset.due)], "", g); }));
+    $("obody").querySelectorAll("tr[data-c]").forEach((tr) => tr.addEventListener("click", () => openThread(Number(tr.dataset.c), g)));
+  }
+
+  function drawContacts(g) {
+    const all = S.out.contacts;
+    if (!all.length) {
+      $("obody").innerHTML = `<div class="card empty"><b>还没有联系人</b>先下载名单模板，把达人、B 端客户、老买家整理进去再导入；也可以一个个添加。
+        <div style="margin-top:14px;display:flex;gap:8px;justify-content:center"><a class="btn" href="${fileUrl("contacts/template.xlsx")}" download>下载名单模板</a><button class="btn primary" id="oimp2">导入名单</button></div></div>`;
+      $("oimp2").addEventListener("click", () => importContacts(g));
+      return;
+    }
+    const o = S.out;
+    const q = o.search.trim().toLowerCase();
+    const rows = all.filter((c) => (!o.kind || c.kind === o.kind) && (!o.status || c.status === o.status)
+      && (!q || [c.name, c.handle, c.country, c.niche, c.company, c.notes].join(" ").toLowerCase().includes(q)));
+    [...o.picked].forEach((id) => { if (!all.some((c) => c.id === id)) o.picked.delete(id); });
+    $("obody").innerHTML = `
+      <div class="filters">
+        <button class="chip ${!o.kind ? "on" : ""}" data-kind="">全部<span class="c">${all.length}</span></button>
+        ${OUT_KINDS.map((k) => `<button class="chip ${o.kind === k ? "on" : ""}" data-kind="${k}">${k}<span class="c">${all.filter((c) => c.kind === k).length}</span></button>`).join("")}
+        <select id="ostatus"><option value="">全部状态</option>${OUT_STATUS.map((s) => `<option ${o.status === s ? "selected" : ""}>${s}</option>`).join("")}</select>
+        <input id="osearch" placeholder="搜称呼、账号、国家、领域" value="${esc(o.search)}">
+      </div>
+      <div class="o-bar"><label class="check-all"><input type="checkbox" id="oall"> 全选当前 ${rows.length} 位</label><span class="muted" id="opicked"></span><span class="grow"></span>
+        <select id="oscen"><option value="">场景：按类型自动选</option>${OUT_SCENARIOS.map((s) => `<option>${s}</option>`).join("")}</select>
+        <button class="btn primary sm" id="ogen">AI 起草私信</button></div>
+      ${rows.length ? `<table class="t"><thead><tr><th style="width:34px"></th><th style="width:180px">联系人</th><th style="width:80px">类型</th><th style="width:110px">国家 · 语言</th>
+        <th style="width:80px">粉丝</th><th>领域 / 最近订单</th><th style="width:84px">状态</th><th style="width:220px">最近往来</th></tr></thead>
+        <tbody>${rows.map((c) => `<tr data-c="${c.id}" class="${o.picked.has(c.id) ? "sel" : ""}"><td><input type="checkbox" data-pick="${c.id}" ${o.picked.has(c.id) ? "checked" : ""}></td>
+          <td><b>${esc(c.name)}</b>${c.sim ? ' <span class="tag warn">模拟</span>' : ""}${c.exp ? ' <span class="tag warn">体验</span>' : ""}${c.handle ? `<div class="faint num">@${esc(c.handle)}</div>` : ""}${c.company ? `<div class="faint">${esc(c.company)}</div>` : ""}</td>
+          <td>${esc(c.kind)}</td><td>${esc([c.country, c.language].filter(Boolean).join(" · ") || "—")}</td>
+          <td class="num">${c.followers ? fmtNum(c.followers) : "—"}</td>
+          <td class="muted" style="font-size:13px">${esc([c.niche, c.last_order].filter(Boolean).join(" · ") || "—")}</td>
+          <td><span class="tag ${OUT_STATUS_TAG[c.status] || "plain"}">${esc(c.status)}</span>${c.pending ? `<div class="faint" style="font-size:12px;margin-top:4px">${esc(c.pending)}</div>` : ""}</td>
+          <td class="muted" style="font-size:12.5px">${c.last ? `<div class="clamp">${c.last.dir === "in" ? "对方：" : "我方："}${esc(c.last.text)}</div><div class="faint">${esc(c.last.at)}${c.followup_text && c.last.dir === "out" ? ` · ${esc(c.followup_text)} 跟进` : ""}</div>` : '<span class="faint">—</span>'}</td></tr>`).join("")}</tbody></table>`
+        : '<div class="card empty"><b>没有符合条件的联系人</b></div>'}`;
+    const sync = () => {
+      $("opicked").textContent = o.picked.size ? `已选 ${o.picked.size} 位` : "";
+      $("ogen").textContent = o.picked.size ? `AI 起草私信（${o.picked.size}）` : "AI 起草私信";
+      $("oall").checked = rows.length > 0 && rows.every((c) => o.picked.has(c.id));
+    };
+    sync();
+    $("obody").querySelectorAll("[data-kind]").forEach((b) => b.addEventListener("click", () => { o.kind = b.dataset.kind; drawContacts(g); }));
+    $("ostatus").addEventListener("change", (e) => { o.status = e.target.value; drawContacts(g); });
+    const sb = $("osearch");
+    sb.addEventListener("input", debounce(() => {
+      o.search = sb.value;
+      drawContacts(g);
+      const n = $("osearch"); n.focus(); n.setSelectionRange(n.value.length, n.value.length);
+    }, 200));
+    $("oall").addEventListener("change", (e) => {
+      rows.forEach((c) => (e.target.checked ? o.picked.add(c.id) : o.picked.delete(c.id)));
+      drawContacts(g);
+    });
+    $("obody").querySelectorAll("[data-pick]").forEach((b) => {
+      b.addEventListener("click", (e) => e.stopPropagation());
+      b.addEventListener("change", () => {
+        const id = Number(b.dataset.pick);
+        if (b.checked) o.picked.add(id); else o.picked.delete(id);
+        b.closest("tr").classList.toggle("sel", b.checked);
+        sync();
+      });
+    });
+    $("obody").querySelectorAll("tr[data-c]").forEach((tr) => tr.addEventListener("click", () => openThread(Number(tr.dataset.c), g)));
+    $("ogen").addEventListener("click", () => {
+      if (!o.picked.size) return toast("先勾选要联系的人", true);
+      outGenerate([...o.picked], $("oscen").value, g);
+    });
+  }
+
+  async function outGenerate(ids, scenario, g) {
+    try {
+      const r = await tc("outreach/generate", { method: "POST", body: { contact_ids: ids, scenario } });
+      S.out.picked.clear();
+      if (r.skipped.length) {
+        await dialog({ title: r.queued ? `开始起草 ${r.queued} 条，跳过 ${r.skipped.length} 位` : "没有可以起草的联系人", cancel: null, ok: "知道了",
+          body: `<ul class="o-skip">${r.skipped.map((s) => `<li>${esc(s)}</li>`).join("")}</ul>` });
+      } else {
+        toast(`AI 开始起草 ${r.queued} 条私信，大约每条 10–20 秒`);
+      }
+      if (r.queued) S.out.tab = "待审核";
+      refreshOverview();
+      if (!stale(g)) loadOutreach(g);
+    } catch (e) {
+      toast(e.message, true);
+    }
+  }
+
+  function drawOutLog(g) {
+    const list = S.out.msgs.filter((m) => ["已发送", "已拒绝"].includes(m.status));
+    if (!list.length) {
+      $("obody").innerHTML = '<div class="card empty"><b>还没有发送记录</b></div>';
+      return;
+    }
+    $("obody").innerHTML = `<table class="t"><thead><tr><th style="width:120px">时间</th><th style="width:170px">联系人</th><th style="width:130px">场景</th>
+      <th>私信</th><th style="width:76px">结果</th><th style="width:90px">审核人</th></tr></thead>
+      <tbody>${list.map((m) => `<tr data-c="${m.contact_id}"><td class="faint num">${esc(m.time_text.slice(5))}</td>
+        <td><b>${esc(m.name)}</b>${m.handle ? `<div class="faint num">@${esc(m.handle)}</div>` : ""}</td><td>${esc(m.scenario)} · ${esc(m.step)}</td>
+        <td class="muted" style="font-size:13px"><div class="clamp">${esc(m.text)}</div></td>
+        <td><span class="tag ${m.status === "已发送" ? "ok" : "plain"}">${m.status === "已发送" ? "已发" : "没发"}</span></td>
+        <td class="faint">${esc(m.approved_by || "—")}</td></tr>`).join("")}</tbody></table>`;
+    $("obody").querySelectorAll("tr[data-c]").forEach((tr) => tr.addEventListener("click", () => openThread(Number(tr.dataset.c), g)));
+  }
+
+  async function drawOutCfg(g) {
+    $("obody").innerHTML = loading(4);
+    try {
+      S.out.cfg = await tc("outreach-settings");
+    } catch (e) {
+      if (!stale(g)) $("obody").innerHTML = errorBox("读取失败：" + e.message, () => drawOutCfg(g));
+      return;
+    }
+    if (stale(g) || S.out.tab !== "设置") return;
+    const c = S.out.cfg;
+    $("obody").innerHTML = `<form class="card form settings-form" id="ocfg" style="max-width:820px">
+      <p class="muted" style="margin:0">AI 起草时会读这里的要点和知识库。价格、佣金、寄样条件这类知识库里没有的，要写在要点里 AI 才会说；没写的它会说「具体方案私信发您」。</p>
+      <label>署名<input name="sender" maxlength="60" value="${esc(c.sender)}" placeholder="如：Hazel · HAFYOUNG"></label>
+      ${OUT_SCENARIOS.map((s) => `<label>${s} · 这次的要点<textarea name="brief_${s}" rows="3" maxlength="1500" placeholder="${esc(BRIEF_HINT[s])}">${esc(c.briefs[s] || "")}</textarea></label>`).join("")}
+      <div class="form-row">${OUT_SCENARIOS.map((s) => `<label>${s} · 几天没回复就提醒<input type="number" min="1" max="30" name="days_${s}" value="${c.followup_days[s]}"></label>`).join("")}
+        <label>最多跟进几次<input type="number" min="0" max="5" name="maxf" value="${c.max_followups}"></label></div>
+      <div><button class="btn primary" type="submit">保存</button></div></form>`;
+    $("ocfg").addEventListener("submit", async (e) => {
+      e.preventDefault();
+      const el = $("ocfg");
+      const body = { sender: field(el, "sender"), briefs: {}, followup_days: {}, max_followups: Number(field(el, "maxf") || 0) };
+      OUT_SCENARIOS.forEach((s) => { body.briefs[s] = field(el, `brief_${s}`); body.followup_days[s] = Number(field(el, `days_${s}`) || 0); });
+      try { await tc("outreach-settings", { method: "PUT", body }); toast("已保存，之后起草的私信会用新要点"); S.out.cfg = null; } catch (err) { toast(err.message, true); }
+    });
+  }
+
+  function contactFormHtml(c = {}) {
+    const opt = (list, v) => list.map((x) => `<option ${x === v ? "selected" : ""}>${x}</option>`).join("");
+    const inp = (name, label, ph = "", max = 120) => `<label>${label}<input name="${name}" maxlength="${max}" value="${esc(c[name] ?? "")}" placeholder="${esc(ph)}"></label>`;
+    return `<div class="form">
+      <div class="form-row"><label>类型<select name="kind">${opt(OUT_KINDS, c.kind || "达人")}</select></label>${inp("name", "称呼", "如：Mia")}
+        <label>状态<select name="status">${opt(OUT_STATUS, c.status || "未联系")}</select></label></div>
+      <div class="form-row">${inp("handle", "TikTok 账号", "如：@mia.camps")}${inp("profile_url", "主页链接", "不填就按账号生成", 300)}</div>
+      <div class="form-row">${inp("country", "国家", "如：美国", 60)}${inp("language", "语言", "如：英语", 30)}<label>粉丝数<input name="followers" value="${c.followers || ""}" placeholder="如：12.5k"></label></div>
+      <div class="form-row">${inp("niche", "领域 / 品类", "如：露营、房车")}${inp("company", "公司", "B 端客户填")}</div>
+      <label>最近订单<input name="last_order" maxlength="1000" value="${esc(c.last_order || "")}" placeholder="如：2026-05 ROG-1 × 200 台"></label>
+      <label>备注<textarea name="notes" rows="2" maxlength="1000" placeholder="AI 起草时会参考，如：做过竞品测评、偏好视频合作">${esc(c.notes || "")}</textarea></label></div>`;
+  }
+
+  const contactBody = (el) => Object.fromEntries(["kind", "name", "status", "handle", "profile_url", "country", "language", "followers", "niche", "company", "last_order", "notes"].map((k) => [k, field(el, k)]));
+
+  async function editContact(c, g) {
+    const ok = await dialog({
+      title: c ? `编辑 ${c.name}` : "添加联系人", body: contactFormHtml(c || {}), ok: "保存", wide: true,
+      async submit(el) {
+        const body = contactBody(el);
+        if (!body.name) throw new Error("请填称呼");
+        if (c) await tc(`contacts/${c.id}`, { method: "PUT", body });
+        else await tc("contacts", { method: "POST", body });
+      },
+    });
+    if (ok) { toast("已保存"); if (!c) S.out.tab = "联系人"; if (!stale(g)) loadOutreach(g); }
+    return ok;
+  }
+
+  function importContacts(g) {
+    const fp = $("filePick");
+    fp.accept = ".xlsx";
+    fp.multiple = false;
+    fp.value = "";
+    fp.onchange = async () => {
+      const f = fp.files[0];
+      if (!f) return;
+      const form = new FormData();
+      form.append("file", f);
+      try {
+        const r = await upload("api/console/contacts/import", form, { headers: { "X-Tenant": S.tenant } });
+        const msg = [r.added && `新增 ${r.added} 位`, r.updated && `更新 ${r.updated} 位`, r.skipped && `跳过 ${r.skipped} 行（类型或称呼不对）`].filter(Boolean).join("，");
+        toast(msg || "没有导入任何联系人，请对照模板检查表头", !(r.added || r.updated));
+        S.out.tab = "联系人";
+        if (!stale(g)) loadOutreach(g);
+      } catch (e) {
+        toast(e.message, true);
+      }
+    };
+    fp.click();
+  }
+
+  async function openThread(cid, g) {
+    let data;
+    try { data = await tc(`contacts/${cid}/thread`); } catch (e) { return toast(e.message, true); }
+    const c = data.contact;
+    const shown = data.messages.filter((m) => m.status !== "已拒绝");
+    const bubble = (m) => {
+      const mine = m.step !== "对方";
+      const tag = m.status === "已发送" || m.status === "已收到" ? "" : `<span class="tag ${m.status === "失败" ? "bad" : "warn"}">${esc(m.status)}</span>`;
+      return `<div class="o-msg ${mine ? "out" : "in"}"><div class="o-meta">${mine ? `我方 · ${esc(m.scenario)} · ${esc(m.step)}` : "对方"} · ${esc(m.time_text)} ${tag}</div>
+        <div class="o-text">${esc(m.text || (m.status === "生成中" ? (mine ? "AI 正在起草…" : "对方正在输入…") : ""))}</div></div>`;
+    };
+    const sent = shown.filter((m) => m.status === "已发送" || m.status === "已收到");
+    const waiting = (c.sim || c.inbox_url) && c.followup_at && sent.length && sent[sent.length - 1].step !== "对方";
+    const ok = await dialog({
+      title: `${c.name}${c.handle ? " · @" + c.handle : ""}${c.sim ? "（模拟）" : ""}`, wide: true, ok: "录入回复", cancel: "关闭",
+      body: `<div class="gap-meta" style="margin-bottom:10px"><span class="tag plain">${esc(c.kind)}</span><span class="tag ${OUT_STATUS_TAG[c.status] || "plain"}">${esc(c.status)}</span>
+          ${esc([c.country, c.language, c.followers ? fmtNum(c.followers) + " 粉丝" : "", c.niche, c.company].filter(Boolean).join(" · "))}
+          <span class="grow"></span>${c.profile_url ? `<a href="${esc(c.profile_url)}" target="_blank" rel="noopener">打开 TikTok 主页 ↗</a>` : ""}
+          ${c.inbox_url ? `<a href="${esc(c.inbox_url)}" target="_blank" rel="noopener">打开体验页 ↗</a>` : ""}
+          ${waiting ? '<button type="button" class="link" data-x="skip">快进到跟进日</button>' : ""}
+          <button type="button" class="link" data-x="edit">编辑资料</button><button type="button" class="link danger" data-x="del">删除</button></div>
+        ${c.last_order || c.notes ? `<div class="gap-bot" style="margin-bottom:10px">${esc([c.last_order && "最近订单：" + c.last_order, c.notes && "备注：" + c.notes].filter(Boolean).join("　"))}</div>` : ""}
+        <div class="o-thread">${shown.length ? shown.map(bubble).join("") : '<div class="faint" style="text-align:center;padding:18px 0">还没有往来</div>'}</div>
+        <div class="form" style="margin-top:12px">
+          <label><span>对方的回复 <span class="faint">从 TikTok 复制过来，原文粘贴</span></span><textarea name="reply" rows="3" maxlength="4000"></textarea></label>
+          <label class="check"><input type="checkbox" name="draft" checked> 录入后让 AI 起草回复（到「待审核」里看）</label>
+          <label>状态<select name="cstatus">${OUT_STATUS.map((s) => `<option ${s === c.status ? "selected" : ""}>${s}</option>`).join("")}</select></label></div>`,
+      onOpen(el) {
+        const th = el.querySelector(".o-thread");
+        th.scrollTop = th.scrollHeight;
+        // One modal element is shared, so close this dialog before opening the next.
+        const then = (fn) => () => { $("modalCancel").click(); setTimeout(fn, 0); };
+        el.querySelector('[data-x="edit"]').addEventListener("click", then(() => editContact(c, g)));
+        el.querySelector('[data-x="skip"]')?.addEventListener("click", then(async () => {
+          try { await tc(`contacts/${c.id}/sim-skip`, { method: "POST" }); toast("已快进：对方一直没回复，到「待跟进」里起草跟进"); S.out.tab = "待跟进"; refreshOverview(); if (!stale(g)) loadOutreach(g); } catch (e) { toast(e.message, true); }
+        }));
+        el.querySelector('[data-x="del"]').addEventListener("click", then(async () => {
+          if (!(await confirmBox(`删除 ${c.name}？`, "<p>这位联系人和所有往来记录都会删掉，不能恢复。</p>", "删除", true))) return;
+          try { await tc(`contacts/${c.id}`, { method: "DELETE" }); toast("已删除"); refreshOverview(); if (!stale(g)) loadOutreach(g); } catch (e) { toast(e.message, true); }
+        }));
+        el.querySelector('[name="cstatus"]').addEventListener("change", async (e) => {
+          try {
+            await tc(`contacts/${c.id}`, { method: "PUT", body: { ...pickContact(c), status: e.target.value } });
+            c.status = e.target.value;
+            toast("状态已更新");
+            if (!stale(g)) loadOutreach(g);
+          } catch (err) { toast(err.message, true); }
+        });
+      },
+      async submit(el) {
+        const text = field(el, "reply");
+        if (!text) throw new Error("把对方的回复贴进来；只想看记录点「关闭」");
+        return tc(`contacts/${c.id}/reply`, { method: "POST", body: { text, draft: field(el, "draft") } });
+      },
+    });
+    if (!ok) return;
+    toast(ok.queued ? "已录入，AI 正在起草回复" : "已录入");
+    if (ok.queued) S.out.tab = "待审核";
+    refreshOverview();
+    if (!stale(g)) loadOutreach(g);
+  }
+
+  const EXP_PRESETS = {
+    达人: { name: "Alex", country: "美国", language: "英语", followers: "20k", niche: "露营 / 帐篷装备测评", company: "", last_order: "", notes: "常在夏天带帐篷露营" },
+    B端客户: { name: "Max", country: "德国", language: "德语", followers: "", niche: "户外用品零售", company: "Camping Haus GmbH", last_order: "2026-04 ROG-2 × 150 台", notes: "" },
+    买家: { name: "Yuki", country: "日本", language: "日语", followers: "", niche: "", company: "", last_order: "2026-09 Space Cool-C11 × 1 台", notes: "已收货" },
+  };
+
+  async function startExperience(g) {
+    const r = await dialog({
+      title: "以客户身份体验", wide: true, ok: "开始体验",
+      body: `<p class="muted" style="margin-top:0">你扮演一位客户，客服会先主动给你发私信；你在体验页里像真客户一样回复。你填的资料就是客服知道的关于你的信息。</p>
+        <div class="form">
+          <div class="form-row"><label>我是<select name="kind">${OUT_KINDS.map((k) => `<option>${k}</option>`).join("")}</select></label>
+            <label>称呼<input name="name" maxlength="120"></label><label>国家<input name="country" maxlength="60"></label><label>语言<input name="language" maxlength="30"></label></div>
+          <div class="form-row"><label>领域 / 品类<input name="niche" maxlength="120"></label><label>粉丝数<input name="followers"></label><label>公司<input name="company" maxlength="120"></label></div>
+          <label>最近订单<input name="last_order" maxlength="1000"></label>
+          <label>备注<input name="notes" maxlength="1000"></label>
+          <label>客服回复方式<select name="mode"><option value="auto">AI 自动发出（体验最顺）</option><option value="review">每条先在运营台审核再发（同时看客户和运营两边）</option></select></label>
+          <p class="faint hint">场景按身份自动选：达人是建联邀约，B 端客户是复购，买家是售后回访。「外联要点」里写的佣金、寄样政策也会用上。</p></div>`,
+      onOpen(el) {
+        const fill = () => Object.entries(EXP_PRESETS[field(el, "kind")]).forEach(([k, v]) => { el.querySelector(`[name="${k}"]`).value = v; });
+        el.querySelector('[name="kind"]').addEventListener("change", fill);
+        fill();
+      },
+      async submit(el) {
+        const body = { auto_send: field(el, "mode") === "auto" };
+        ["kind", "name", "country", "language", "niche", "followers", "company", "last_order", "notes"].forEach((k) => { body[k] = field(el, k); });
+        if (!body.name) throw new Error("请填称呼");
+        return tc("outreach/experience", { method: "POST", body });
+      },
+    });
+    if (!r) return;
+    const url = new URL(r.inbox_url, location.href).href;
+    S.out.tab = "联系人";
+    refreshOverview();
+    if (!stale(g)) loadOutreach(g);
+    await dialog({
+      title: "体验页准备好了", cancel: "关闭", ok: null,
+      body: `<p>客服正在给你写第一条私信，打开下面的链接就能看到（用手机打开效果更像）。</p>
+        <p><a class="btn primary" href="${esc(url)}" target="_blank" rel="noopener">打开体验页 ↗</a></p>
+        <div class="secret"><div class="secret-row"><code>${esc(url)}</code><button type="button" class="btn sm" data-copy="${esc(url)}">复制链接</button></div></div>`,
+      onOpen(el) {
+        el.querySelector("[data-copy]").addEventListener("click", async (e) => { e.target.textContent = (await copyText(url)) ? "已复制" : "复制失败"; });
+      },
+    });
+  }
+
+  async function loadSim(g) {
+    const ok = await dialog({
+      title: "演练模式", ok: "载入 7 位模拟联系人",
+      body: `<p>载入几位模拟的达人、经销商和买家，你可以把「起草 → 审核 → 发出 → 对方回复 → 再回复 / 跟进」整个流程走一遍，不会真的发到 TikTok。</p>
+        <p>每位模拟联系人有自己的脾气和剧本（你看不到）：有问佣金的、挑参数的、先不理人的、要折扣的、来投诉的。对方的回复由 AI 扮演。</p>
+        <p class="faint">之前载入的模拟联系人和往来记录会清空重来；真实联系人不受影响。</p>`,
+      async submit() { return tc("outreach/sim", { method: "POST" }); },
+    });
+    if (!ok) return;
+    toast(`已载入 ${ok.added} 位模拟联系人`);
+    S.out.tab = "联系人";
+    refreshOverview();
+    if (!stale(g)) loadOutreach(g);
+  }
+
+  const pickContact = (c) => Object.fromEntries(["kind", "name", "status", "handle", "profile_url", "country", "language", "followers", "niche", "company", "last_order", "notes"].map((k) => [k, c[k] ?? ""]));
 
   // ---------- settings: brand, rules, embed, members, usage ----------
 

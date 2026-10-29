@@ -45,41 +45,28 @@ docker compose -f docker-compose.yml up -d
 1. 模型供应商里加对话模型和向量模型。本机用的是 OpenRouter：对话 `deepseek/deepseek-v4.1-flash`，向量 `qwen/qwen3-embedding-8b`。换成 DeepSeek、百炼等国内渠道也可以。
 2. 在 API 页面生成一个 API Key，下一步要用。
 
-### 2. 启动客服平台
+### 2. 安装客服平台
+
+把安装包传到服务器（或者直接 `git clone` 本仓库），解压后运行安装脚本：
 
 ```bash
-sudo git clone <本仓库地址> /opt/kefu-platform
-cd /opt/kefu-platform
-python3 -m venv .venv && .venv/bin/pip install -r requirements.txt
-cp .env.example .env
+scp kefu-platform-*.tar.gz root@<服务器>:/root/
+ssh root@<服务器>
+tar xzf kefu-platform-*.tar.gz && cd kefu-platform
+sudo bash deploy/install.sh
 ```
 
-改 `.env`（字段说明见 `.env.example`）：
+脚本会提示输入两个密钥：RAGFlow 的 API Key，以及评分和 AI 起草用的模型 Key。它们只写进 `/etc/kefu/`（权限 600），不进 `.env` 也不进仓库。脚本做的事：
 
-```
-MUXU_DATA_DIR=/var/lib/muxu
-RAGFLOW_URL=http://127.0.0.1:9380/api/v1
-RAGFLOW_API_KEY_FILE=/etc/kefu/ragflow_api_key
-LLM_BASE_URL=https://openrouter.ai/api/v1
-LLM_API_KEY_FILE=/etc/kefu/llm_api_key
-JUDGE_MODEL=deepseek/deepseek-v4-pro
-```
+- 把代码装到 `/opt/kefu-platform`，建 venv 装依赖；
+- 生成 `.env`，数据放 `/var/lib/muxu`，模型渠道默认 OpenRouter，可以用环境变量 `LLM_BASE_URL`、`JUDGE_MODEL` 改，或者装好后改 `.env`（字段说明见 `.env.example`）；
+- 装 systemd 服务 `muxu`（开机自启、挂了自动重启）和 nginx 站点 `kefu.conf`（80 端口）。
 
-密钥只放在文件里，不要写进 `.env` 或提交到仓库：
+更新代码时重新解压新包再跑一次脚本即可，已有的 `.env`、密钥和数据不会被覆盖。
 
-```bash
-sudo mkdir -p /etc/kefu && sudo chmod 700 /etc/kefu
-echo -n '<RAGFlow API Key>' | sudo tee /etc/kefu/ragflow_api_key >/dev/null
-echo -n '<评分模型 Key>'    | sudo tee /etc/kefu/llm_api_key >/dev/null
-sudo chmod 600 /etc/kefu/*
-```
+国内服务器装依赖慢的话，用镜像源：`sudo PIP_INDEX_URL=https://pypi.tuna.tsinghua.edu.cn/simple bash deploy/install.sh`。国内服务器一般连不上 OpenRouter，模型渠道换成 DeepSeek、百炼等国内渠道（RAGFlow 里的模型也一样）。
 
-开机自启和对外访问：
-
-```bash
-sudo cp deploy/muxu.service /etc/systemd/system/ && sudo systemctl enable --now muxu
-sudo cp deploy/nginx/kefu.conf /etc/nginx/conf.d/ && sudo nginx -t && sudo systemctl reload nginx
-```
+注意 RAGFlow 的 Docker 默认把 9380 端口开在所有网卡上，安全组或防火墙里只放行 80/443，不要对外开 9380。
 
 ### 3. 首次登录
 
@@ -87,7 +74,20 @@ sudo cp deploy/nginx/kefu.conf /etc/nginx/conf.d/ && sudo nginx -t && sudo syste
 
 ## 迁移现有客户
 
-平台数据库（`platform.db`）里记着每个客户在 RAGFlow 里的知识库和助手 ID，所以**平台数据和 RAGFlow 数据要一起搬**，只搬一边会对不上。数据里有客户对话和账号，不进 git，单独打包传输。
+平台数据库（`platform.db`）里记着每个客户在 RAGFlow 里的知识库和助手 ID，所以**平台数据和 RAGFlow 数据要一起搬**，只搬一边会对不上。`migrate.py` 按客户整体搬：
+
+```bash
+# 旧服务器：导出一个客户（文件、切好的知识段、问答库、助手设置、测试题和评分记录、对话、主动跟进、成员账号）
+python3 migrate.py export hafyoung hafyoung-export.tar.gz
+
+# 新服务器：先装好平台、RAGFlow 里配好对话和向量模型，再导入
+cd /opt/kefu-platform && sudo .venv/bin/python migrate.py import /root/hafyoung-export.tar.gz
+```
+
+- 资料库按原样写回已经切好的知识段，新服务器不用重新 OCR，回答依据和旧服务器完全一样；问答库表格会重新解析。每段要重新算向量，几百段大约十几分钟，`MIGRATE_CONCURRENCY` 控制并发（默认 8）。
+- 成员账号连同密码一起搬，登录密码和旧服务器相同。同一邮箱在新服务器已存在时只加成员身份。
+- 导入失败会自动删掉建了一半的知识库；也可以 `migrate.py remove <客户代号> --yes` 删掉后重来。
+- 导出文件里有客户资料、对话和密码哈希，权限是 600。不要进 git，传完、导入成功后删掉。
 
 ## 备份
 
@@ -95,5 +95,5 @@ sudo cp deploy/nginx/kefu.conf /etc/nginx/conf.d/ && sudo nginx -t && sudo syste
 
 ## deploy/ 里的文件
 
-- `muxu.service`、`nginx/kefu.conf`：新服务器用。
+- `install.sh`、`muxu.service`、`nginx/kefu.conf`：新服务器用。
 - `start_ragflow.sh`、`keepalive.sh`、`nginx/nginx.conf` 等：开发机上不用 Docker 跑整套服务的脚本，路径写死为 `/home/hubin/ragflow-local`，仅供参考。`ragflow_service_conf.patch` 是那套环境对 RAGFlow 配置的改动（只监听本机、去掉默认向量模型）。

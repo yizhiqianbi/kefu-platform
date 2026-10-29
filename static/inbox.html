@@ -1,0 +1,120 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>私信 · 体验</title>
+<style>
+  :root { --accent: #fe2c55; --bg: #f1f1f2; --ink: #161823; --ink-2: #57585f; --ink-3: #8a8b91; --line: #e3e3e4; }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; }
+  body { font: 15px/1.5 -apple-system, BlinkMacSystemFont, "PingFang SC", "Noto Sans SC", "Segoe UI", sans-serif; color: var(--ink); background: #d9d9dc; display: flex; justify-content: center; }
+  .phone { width: 100%; max-width: 440px; height: 100%; background: #fff; display: flex; flex-direction: column; box-shadow: 0 0 40px rgba(0,0,0,.12); }
+  header { display: flex; align-items: center; gap: 10px; padding: 12px 14px; border-bottom: 1px solid var(--line); }
+  .back { font-size: 22px; color: var(--ink-2); width: 18px; }
+  .av { width: 38px; height: 38px; border-radius: 50%; display: grid; place-items: center; color: #fff; font-weight: 700; flex: none; }
+  .who b { display: block; font-size: 15.5px; }
+  .who span { font-size: 12px; color: var(--ink-3); }
+  .note { margin: 10px 12px 0; padding: 9px 12px; border-radius: 10px; background: #fff7e6; color: #8a5a00; font-size: 12.5px; }
+  .note b { color: #6b4500; }
+  #list { flex: 1; overflow-y: auto; padding: 14px 12px 8px; display: flex; flex-direction: column; gap: 10px; background: var(--bg); margin-top: 10px; }
+  .day { align-self: center; font-size: 11.5px; color: var(--ink-3); }
+  .row { display: flex; gap: 8px; align-items: flex-end; max-width: 86%; }
+  .row.me { align-self: flex-end; flex-direction: row-reverse; }
+  .row .av { width: 30px; height: 30px; font-size: 13px; }
+  .bubble { padding: 9px 13px; border-radius: 18px; background: #fff; white-space: pre-wrap; word-break: break-word; font-size: 14.5px; }
+  .row.me .bubble { background: var(--accent); color: #fff; }
+  .row .t { font-size: 11px; color: var(--ink-3); margin: 0 4px 2px; white-space: nowrap; }
+  .typing { align-self: flex-start; font-size: 12.5px; color: var(--ink-3); padding: 2px 40px; }
+  .dots span { display: inline-block; width: 5px; height: 5px; border-radius: 50%; background: var(--ink-3); margin-right: 3px; animation: b 1.2s infinite; }
+  .dots span:nth-child(2) { animation-delay: .2s; } .dots span:nth-child(3) { animation-delay: .4s; }
+  @keyframes b { 0%, 60%, 100% { opacity: .25; } 30% { opacity: 1; } }
+  .empty { margin: auto; color: var(--ink-3); font-size: 13px; text-align: center; }
+  .tools { padding: 6px 12px 0; display: flex; justify-content: center; }
+  .tools button { border: 1px dashed #c9c9cc; background: #fff; color: var(--ink-2); border-radius: 999px; padding: 5px 12px; font-size: 12.5px; cursor: pointer; }
+  form { display: flex; gap: 8px; padding: 10px 12px calc(10px + env(safe-area-inset-bottom)); border-top: 1px solid var(--line); background: #fff; }
+  textarea { flex: 1; resize: none; border: 0; background: var(--bg); border-radius: 20px; padding: 10px 14px; font: inherit; max-height: 120px; outline: none; }
+  form button { border: 0; border-radius: 50%; width: 40px; height: 40px; background: var(--accent); color: #fff; font-size: 17px; cursor: pointer; flex: none; align-self: flex-end; }
+  form button:disabled { opacity: .4; cursor: default; }
+  .toast { position: fixed; left: 50%; bottom: 90px; transform: translateX(-50%); background: rgba(22,24,35,.88); color: #fff; padding: 8px 14px; border-radius: 10px; font-size: 13px; opacity: 0; transition: opacity .2s; pointer-events: none; max-width: 360px; text-align: center; }
+  .toast.show { opacity: 1; }
+</style>
+</head>
+<body>
+<div class="phone">
+  <header><span class="back" aria-hidden="true">‹</span><div class="av" id="shopAv"></div>
+    <div class="who"><b id="shopName">…</b><span>TikTok 私信 · 体验页</span></div></header>
+  <div class="note" id="note"></div>
+  <div id="list"><div class="empty">加载中…</div></div>
+  <div class="tools" id="tools" hidden><button type="button" id="skip">假装过了几天，我一直没回复</button></div>
+  <form id="f"><textarea id="msg" rows="1" maxlength="2000" placeholder="发消息…"></textarea><button id="send" aria-label="发送">➤</button></form>
+</div>
+<div class="toast" id="toast"></div>
+<script>
+(function () {
+  const token = location.pathname.split("/").filter(Boolean).pop();
+  const API = location.pathname.replace(/inbox\/.*$/, "") + "api/inbox/" + token;
+  const $ = (id) => document.getElementById(id);
+  const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+  let last = "", shop = null, busy = false;
+
+  function toast(t) { const el = $("toast"); el.textContent = t; el.classList.add("show"); clearTimeout(el._t); el._t = setTimeout(() => el.classList.remove("show"), 3200); }
+
+  async function req(path, body) {
+    const r = await fetch(API + path, body ? { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) } : {});
+    const d = await r.json().catch(() => ({}));
+    if (!r.ok) throw new Error(d.error || "出错了，请稍后再试");
+    return d;
+  }
+
+  function draw(d) {
+    if (!shop) {
+      shop = d.shop;
+      document.documentElement.style.setProperty("--accent", shop.accent || "#fe2c55");
+      $("shopAv").textContent = shop.short || shop.name.slice(0, 1);
+      $("shopAv").style.background = shop.dark || "#161823";
+      $("shopName").textContent = shop.name;
+      document.title = `${shop.name} · 私信体验`;
+      $("note").innerHTML = `你现在是<b>「${esc(d.me.name)}」（${esc(d.me.kind)}）</b>，像真客户一样回复就行。消息不会发到真的 TikTok。`
+        + (d.auto_send ? "客服的回复由 AI 自动发出。" : "客服每条回复要运营在运营台审核后才会发出。");
+    }
+    const key = JSON.stringify([d.messages, d.typing, d.reviewing]);
+    $("tools").hidden = !d.can_skip;
+    if (key === last) return;
+    last = key;
+    const av = `<div class="av" style="background:${esc(shop.dark)}">${esc(shop.short)}</div>`;
+    let html = d.messages.map((m) => `<div class="row ${m.mine ? "me" : ""}">${m.mine ? "" : av}<div class="bubble">${esc(m.text)}</div><span class="t">${esc(m.at)}</span></div>`).join("");
+    if (d.typing) html += `<div class="typing"><span class="dots"><span></span><span></span><span></span></span> 对方正在输入</div>`;
+    else if (d.reviewing) html += `<div class="typing">客服已经写好回复，正在等运营审核…</div>`;
+    if (!d.messages.length && !d.typing && !d.reviewing) html = '<div class="empty">还没有消息</div>';
+    $("list").innerHTML = html;
+    $("list").scrollTop = $("list").scrollHeight;
+  }
+
+  async function poll() {
+    try { draw(await req("")); } catch (e) { if (!shop) $("list").innerHTML = `<div class="empty">${esc(e.message)}</div>`; }
+    setTimeout(poll, 2000);
+  }
+
+  $("f").addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const text = $("msg").value.trim();
+    if (!text || busy) return;
+    busy = true; $("send").disabled = true;
+    try { await req("/reply", { text }); $("msg").value = ""; $("msg").style.height = ""; draw(await req("")); } catch (err) { toast(err.message); }
+    busy = false; $("send").disabled = false;
+  });
+  $("msg").addEventListener("keydown", (e) => { if (e.key === "Enter" && !e.shiftKey && !e.isComposing) { e.preventDefault(); $("f").requestSubmit(); } });
+  $("msg").addEventListener("input", () => { const t = $("msg"); t.style.height = "auto"; t.style.height = Math.min(t.scrollHeight, 120) + "px"; });
+  $("skip").addEventListener("click", async () => {
+    try {
+      const r = await req("/skip", {});
+      toast(r.stopped ? r.note : "已经过了几天……客服会主动来跟进");
+      draw(await req(""));
+    } catch (err) { toast(err.message); }
+  });
+  poll();
+})();
+</script>
+</body>
+</html>
