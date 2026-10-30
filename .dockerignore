@@ -1,0 +1,9 @@
+.git
+.env
+.venv
+data
+logs
+deploy
+**/__pycache__
+**/*.pyc
+static/.hallmark

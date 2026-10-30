@@ -27,6 +27,13 @@ deploy/        部署文件，见下文
 
 ## 部署到新服务器
 
+有两种一键安装，Docker、RAGFlow、模型、平台和客户导入一次装好：
+
+- 阿里云 ECS（中国内地）：见 [deploy/aliyun/README.md](deploy/aliyun/README.md)；
+- Mac（比如拿 Mac mini 当服务器）：见 [deploy/mac/README.md](deploy/mac/README.md)。
+
+其他服务器按下面三步手动装。
+
 建议配置：4 核 16G、100G SSD，Ubuntu 22.04，装好 Docker。RAGFlow 自带 MySQL、Elasticsearch、Redis、MinIO，内存主要花在它身上。
 
 ### 1. 启动 RAGFlow
@@ -96,4 +103,7 @@ cd /opt/kefu-platform && sudo .venv/bin/python migrate.py import /root/hafyoung-
 ## deploy/ 里的文件
 
 - `install.sh`、`muxu.service`、`nginx/kefu.conf`：新服务器用。
+- `ragflow/`：两种一键安装共用。`docker/` 是 RAGFlow v0.27.3 的 Docker 编排文件，其中 `.env` 存为 `env.template`；`bootstrap.py` 在 RAGFlow 容器里建管理员、接模型（百炼或 OpenRouter）、生成 API Key。
+- `aliyun/install_all.sh`：阿里云一键安装。
+- `mac/install.sh`、`mac/docker-compose.mac.yml`：Mac 一键安装。平台也跑在容器里，镜像由仓库根目录的 `Dockerfile` 构建。
 - `start_ragflow.sh`、`keepalive.sh`、`nginx/nginx.conf` 等：开发机上不用 Docker 跑整套服务的脚本，路径写死为 `/home/hubin/ragflow-local`，仅供参考。`ragflow_service_conf.patch` 是那套环境对 RAGFlow 配置的改动（只监听本机、去掉默认向量模型）。

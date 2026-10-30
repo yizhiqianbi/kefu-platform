@@ -1,0 +1,44 @@
+# Mac 上叠加在 RAGFlow 的 docker-compose.yml 之上（.env 里 COMPOSE_FILE 已经写好，直接 docker compose 即可）：
+# 依赖服务走 ARM 原生镜像并可换镜像站，RAGFlow 官方只有 x86 镜像，靠 Rosetta 跑；再加上客服平台。
+services:
+  es01:
+    image: ${HUB_MIRROR:-docker.io}/library/elasticsearch:${STACK_VERSION}
+  mysql:
+    image: ${HUB_MIRROR:-docker.io}/library/mysql:8.0.40
+  minio:
+    image: ${HUB_MIRROR:-docker.io}/pgsty/silo:RELEASE.2026-08-06T00-00-00Z
+  redis:
+    image: ${HUB_MIRROR:-docker.io}/valkey/valkey:8
+  ragflow-cpu:
+    platform: linux/amd64
+
+  kefu:
+    build:
+      context: ${KEFU_SRC:-../platform}
+      args:
+        BASE_IMAGE: ${HUB_MIRROR:-docker.io}/library/python:3.12-slim
+        PIP_INDEX_URL: ${KEFU_PIP_INDEX:-https://pypi.org/simple}
+    image: kefu-platform:local
+    depends_on:
+      - ragflow-cpu
+    environment:
+      RAGFLOW_URL: http://ragflow-cpu:9380/api/v1
+      RAGFLOW_API_KEY_FILE: /run/kefu/ragflow_api_key
+      RAGFLOW_CHAT_MODEL: ${KEFU_CHAT_MODEL:-}
+      RAGFLOW_EMBED_MODEL: ${KEFU_EMBED_MODEL:-}
+      LLM_BASE_URL: ${KEFU_LLM_BASE_URL}
+      LLM_API_KEY_FILE: /run/kefu/llm_api_key
+      JUDGE_MODEL: ${KEFU_JUDGE_MODEL}
+      DEFAULT_TENANT: ${KEFU_DEFAULT_TENANT:-muxu}
+      TZ: ${TZ:-Asia/Shanghai}
+    volumes:
+      - kefu_data:/data
+      - ${KEFU_SECRETS:-../secrets}:/run/kefu:ro
+    ports:
+      - ${KEFU_PORT:-80}:8770
+    networks:
+      - ragflow
+    restart: unless-stopped
+
+volumes:
+  kefu_data:

@@ -46,6 +46,8 @@ if [ ! -f .env ]; then
 MUXU_DATA_DIR=$DATA
 RAGFLOW_URL=${RAGFLOW_URL:-http://127.0.0.1:9380/api/v1}
 RAGFLOW_API_KEY_FILE=$SECRETS/ragflow_api_key
+RAGFLOW_CHAT_MODEL=${RAGFLOW_CHAT_MODEL:-}
+RAGFLOW_EMBED_MODEL=${RAGFLOW_EMBED_MODEL:-}
 LLM_BASE_URL=${LLM_BASE_URL:-https://openrouter.ai/api/v1}
 LLM_API_KEY_FILE=$SECRETS/llm_api_key
 JUDGE_MODEL=${JUDGE_MODEL:-deepseek/deepseek-v4-pro}

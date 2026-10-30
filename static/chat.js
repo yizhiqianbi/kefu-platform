@@ -34,7 +34,7 @@
     return n ? `<a class="tel" href="tel:${n.replace(/-/g, "")}">${label ? label + " " : ""}${esc(n)}</a>` : "";
   }
   function phoneLinks() {
-    return [telLink("销售", cfg.sales_phone), telLink("售后", cfg.service_phone)].filter(Boolean).join('<span class="sep">·</span>');
+    return [telLink("销售", cfg.sales_phone), telLink("售后", cfg.service_phone)].filter(Boolean).join("");
   }
   const mainPhone = () => cfg.sales_phone || cfg.service_phone || "";
 
@@ -50,7 +50,7 @@
     const el = document.createElement("section");
     el.className = "hero";
     const items = cfg.quick.map((x) => (Array.isArray(x) ? x : ["", x]));
-    el.innerHTML = `<h2>您好，想了解<em>点什么</em>？</h2><p>${esc(cfg.welcome)}</p>
+    el.innerHTML = `<h2>您好，想了解点什么？</h2><p>${esc(cfg.welcome)}</p>
       <div class="qgrid">${items.map(([tag, q]) => `<button class="qcard" type="button" data-q="${esc(q)}">
         ${tag ? `<span class="qtag">${esc(tag)}</span>` : ""}<span class="qtext">${esc(q)}${ICON.arrow}</span></button>`).join("")}</div>`;
     el.querySelectorAll(".qcard").forEach((b) => b.addEventListener("click", () => send(b.dataset.q)));

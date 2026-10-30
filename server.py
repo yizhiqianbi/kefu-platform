@@ -161,11 +161,18 @@ def customer_page(slug, rel_static):
     if not t:
         raise HTTPException(404, "没有这个客户")
     cfg = json.dumps(public_config(t), ensure_ascii=False).replace("</", "<\\/")
-    return render("index.html", rel_static, {"__CFG__": cfg, "__TITLE__": html.escape(f"{t['name']} · 在线咨询")})
+    desc = t["brand"].get("lead") or t["brand"].get("welcome") or f"{t['name']}在线客服，产品、参数和售后问题都可以直接问。"
+    return render("index.html", rel_static, {"__CFG__": cfg, "__TITLE__": html.escape(f"{t['name']} · 在线咨询"),
+                                             "__DESC__": html.escape(desc, quote=True)})
 
 
 def redirect(location):
     return Response(status_code=308, headers={"Location": location})
+
+
+@app.get("/")
+async def r_site_root():
+    return Response(status_code=302, headers={"Location": "/muxu/"})
 
 
 @app.get("/muxu")
