@@ -1,0 +1,9 @@
+{
+  "name": "muxu-fb-bridge",
+  "private": true,
+  "description": "Messenger 个人号连接（ws3-fca），一个号一个进程，由 muxu 通过标准输入输出驱动",
+  "main": "worker.js",
+  "dependencies": {
+    "ws3-fca": "3.5.2"
+  }
+}

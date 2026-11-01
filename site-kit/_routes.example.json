@@ -1,0 +1,6 @@
+{
+  "version": 1,
+  "include": ["/", "/index.html", "/404.html", "/en/*", "/de/*", "/products/*", "/blog/*",
+    "/robots.txt", "/llms.txt", "/sitemap.xml", "/k/*"],
+  "exclude": ["/assets/*"]
+}

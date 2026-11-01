@@ -7,5 +7,9 @@ python-multipart>=0.0.9
 openpyxl>=3.1
 # 用 PostgreSQL 时再装
 # psycopg[binary]>=3.1
-# 只有截图走查 shots.py 需要
-# playwright>=1.45
+# 个人号（社媒消息 → 渠道设置 → 个人号）；WhatsApp 另外要在 wa-bridge/ 里 npm install，
+# Messenger 在 fb-bridge/ 里 npm install --ignore-scripts；TikTok 和 Messenger 登录要 playwright install chromium（截图走查 shots.py 也用）
+playwright>=1.45
+telethon>=1.40
+python-socks[asyncio]>=2.4
+instagrapi>=2.1

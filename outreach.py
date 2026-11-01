@@ -1,4 +1,5 @@
-"""主动跟进：AI 起草发给达人、B 端客户、老买家的 TikTok 私信，人工审核后再发。"""
+"""主动跟进：AI 起草发给达人、B 端客户、老买家的 TikTok 私信或邮件，人工审核或自动运营后发出。"""
+import re
 from datetime import datetime
 
 import db
@@ -7,11 +8,14 @@ import grading
 import llm
 
 KINDS = ("达人", "B端客户", "买家")
+CUSTOMER_KINDS = ("询盘客户",) + KINDS  # 询盘客户 = came to us through a channel; not an outreach target type
 SCENARIOS = ("达人建联", "老客户复购", "售后回访")
 CONTACT_STATUS = ("未联系", "已联系", "已回复", "合作中", "已成交", "不再联系")
 PENDING = ("生成中", "待审核", "待发送")
 TEXT_MAX = 2000  # TikTok Shop IM text limit
 QA_MAX = 16000
+TERMS_RE = re.compile(r"(?i)commission|\brate\b|price|pricing|cost|\bfee|paid|payment|budget|contract|refund|complain"
+                      r"|provision|preis|kosten|vertrag|tarif|prix|precio|comisi|佣金|价格|报价|费用|合同|退款|投诉")
 
 KIND_DESC = {
     "达人": "TikTok 达人（内容创作者）",
@@ -30,7 +34,15 @@ DEFAULT_CFG = {
     "briefs": {s: "" for s in SCENARIOS},
     "followup_days": {"达人建联": 3, "老客户复购": 7, "售后回访": 7},
     "max_followups": 2,
+    # 达人画像：AI 按它给导入的达人打分
+    "profile": {"countries": "", "niches": "", "followers_min": 5000, "followers_max": 500000, "notes": ""},
+    # 自动运营：mode=review 起草后等人审核，auto 起草后直接发（需要人工的照样留给人）
+    "pilot": {"enabled": False, "mode": "review", "min_score": 70, "daily_new": 20},
+    # 发信邮箱（密码单独存，见 mailer.py）
+    "mail": {"via": "smtp", "inbox_id": 0, "from_name": "", "address": "", "username": "", "smtp_host": "", "smtp_port": 465,
+             "imap_host": "", "imap_port": 993, "postal": ""},
 }
+NESTED = ("briefs", "followup_days", "profile", "pilot", "mail")
 
 PROMPT = """你是「{name}」的外联专员，在 TikTok 私信里主动联系{kind_desc}。现在要写{step_desc}
 今天是 {today}。提到季节时按对方所在国家判断（注意南北半球）。
@@ -60,7 +72,7 @@ PROMPT = """你是「{name}」的外联专员，在 TikTok 私信里主动联系
 - 不说「最」「第一」「100%」，不提竞品，不提公司内部资料。
 - 结尾给一个对方很容易回答的问题。
 - 署名：{sender}
-- 对方的话涉及投诉、退款、要报价或合同、要求承诺，或者明确拒绝合作时，needs_human 设为 true，在 note 里说明原因；对方明确拒绝时，text 只写一句礼貌的收尾。
+- 对方的话涉及投诉、退款、要报价或合同、要求承诺，问到价格、佣金、寄样条件、交期这类要点里没给答案的问题，或者明确拒绝合作时，needs_human 设为 true，在 note 里说明原因；对方明确拒绝时，text 只写一句礼貌的收尾。
 
 只输出 JSON：{{"text": "要发出去的私信原文", "note": "写给审核人的一句中文：用了哪些事实、哪里要人工确认（不要写字段名）", "needs_human": false}}"""
 
@@ -155,15 +167,23 @@ def cfg(tid):
     row = db.q("SELECT data FROM outreach_cfg WHERE tenant_id=:t", one=True, t=tid)
     data = db.loads(row["data"], {}) if row else {}
     out = {**DEFAULT_CFG, **data}
-    out["briefs"] = {**DEFAULT_CFG["briefs"], **(data.get("briefs") or {})}
-    out["followup_days"] = {**DEFAULT_CFG["followup_days"], **(data.get("followup_days") or {})}
+    for k in NESTED:
+        out[k] = {**DEFAULT_CFG[k], **(data.get(k) or {})}
     return out
+
+
+def save_cfg(tid, data):
+    if db.q("SELECT tenant_id FROM outreach_cfg WHERE tenant_id=:t", one=True, t=tid):
+        db.x("UPDATE outreach_cfg SET data=:d WHERE tenant_id=:t", d=db.dumps(data), t=tid)
+    else:
+        db.insert(db.outreach_cfg, tenant_id=tid, data=db.dumps(data))
 
 
 def contact_text(c):
     rows = [("类型", c["kind"]), ("称呼", c["name"]), ("TikTok 账号", c["handle"]), ("国家", c["country"]),
             ("语言", c["language"]), ("粉丝数", c["followers"] or ""), ("领域 / 品类", c["niche"]),
             ("公司", c["company"]), ("最近订单", c["last_order"]), ("备注", c["notes"])]
+    rows += list(db.loads(c.get("metrics"), {}).items())
     return "\n".join(f"- {k}：{v}" for k, v in rows if v)
 
 
@@ -179,7 +199,26 @@ def next_step(contact_id):
     return "回复" if thread[-1]["step"] == "对方" else "跟进"
 
 
-async def draft(tenant, contact, scenario, step):
+EMAIL_EXTRA = """
+
+【渠道】这次是发邮件，不是 TikTok 私信：上面说「私信」的地方都按邮件理解。正文像真人写的简短商务邮件，开头称呼对方，分两三段。
+{subject_rule}
+只输出 JSON：{{"subject": "邮件主题", "text": "邮件正文", "note": "写给审核人的一句中文", "needs_human": false}}"""
+SUBJECT_NEW = "另写一个邮件主题：用对方的语言，8 个词以内，具体说明来意（比如提到他的领域和寄样合作），不要像广告，不用感叹号和全大写。"
+SUBJECT_RE = "邮件主题已经定了（沿用之前的「{subject}」），subject 原样填这个。"
+
+
+def thread_subject(contact_id):
+    row = db.q("SELECT subject FROM outreach WHERE contact_id=:c AND channel='email' AND subject<>'' "
+               "AND status IN ('已发送', '已收到') ORDER BY id LIMIT 1", one=True, c=contact_id)
+    return row["subject"] if row else ""
+
+
+def reply_subject(subject):
+    return subject if re.match(r"(?i)re:", subject) else f"Re: {subject}"
+
+
+async def draft(tenant, contact, scenario, step, channel="tiktok"):
     c = cfg(tenant["id"])
     thread = thread_of(contact["id"])
     brief = (c["briefs"].get(scenario) or "").strip()
@@ -202,6 +241,9 @@ async def draft(tenant, contact, scenario, step):
         step_desc=step_desc.format(n=contact["followups"] + 1), scenario=scenario, goal=GOAL[scenario],
         brief=brief, contact=contact_text(contact), thread=history,
         chunks=sources, rules=tenant["rules"].strip() or "（无）", length=length, sender=sender)
+    subject = thread_subject(contact["id"]) if channel == "email" else ""
+    if channel == "email":
+        prompt += EMAIL_EXTRA.format(subject_rule=SUBJECT_RE.format(subject=subject) if subject else SUBJECT_NEW)
     data = await llm.chat_json([{"role": "user", "content": prompt}], tenant_id=tenant["id"], kind="outreach", temperature=0.6)
     text = (data.get("text") or "").strip()
     if not text:
@@ -215,4 +257,10 @@ async def draft(tenant, contact, scenario, step):
     if fixes and (checked.get("text") or "").strip():
         text = checked["text"].strip()
         note = (note + " ｜ 核对时改了：" + "；".join(fixes)).strip(" ｜")
-    return {"text": text[:TEXT_MAX], "note": note[:500], "needs_human": bool(data.get("needs_human"))}
+    if channel == "email":
+        subject = reply_subject(subject) if subject else (str(data.get("subject") or "").strip()[:150] or f"{tenant['name']} × {contact['name']}")
+    needs_human = bool(data.get("needs_human"))
+    if step == "回复" and not needs_human and TERMS_RE.search(query):
+        needs_human = True
+        note = (note + " ｜ 对方提到钱或合同，请人工确认后再发").strip(" ｜")
+    return {"text": text[:TEXT_MAX], "note": note[:500], "needs_human": needs_human, "subject": subject}

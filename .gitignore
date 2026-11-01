@@ -3,3 +3,8 @@ __pycache__/
 .env
 data/
 logs/
+wa-bridge/node_modules/
+fb-bridge/node_modules/
+video-studio/node_modules/
+video-studio/.bundle/
+video-studio/public/

@@ -6,7 +6,9 @@
 
 The export is the parsed knowledge, not just the files: 资料库 chunks are written back as-is, so the new server
 needs no OCR and answers from exactly the same text. 问答库 spreadsheets are re-parsed (fast and lossless).
-The file holds customer data and password hashes; keep it chmod 600 and delete it after importing.
+Also carried: SEO / GEO (settings, site stats, audits, GEO runs, search data) and the files in data/seo/{tid}/
+(site stats key, Google service account key, Bing API key).
+The file holds customer data, password hashes and those keys; keep it chmod 600 and delete it after importing.
 """
 import asyncio
 import fcntl
@@ -28,7 +30,8 @@ import engine
 import settings
 
 VERSION = 1
-TABLES = ["tests", "runs", "messages", "feedback", "handoffs", "gaps", "contacts", "outreach", "outreach_cfg", "llm_usage"]
+TABLES = ["tests", "runs", "messages", "feedback", "handoffs", "gaps", "contacts", "outreach", "outreach_cfg", "llm_usage", "pilot_events",
+          "seo_cfg", "site_hits", "seo_audits", "geo_runs", "search_rows"]
 CHAT_FIELDS = ["similarity_threshold", "vector_similarity_weight", "top_n", "llm_setting", "prompt_config"]
 
 
@@ -62,6 +65,13 @@ async def export(slug, out):
             manifest["tables"][name] = db.q(f"SELECT * FROM {name} WHERE tenant_id=:t", t=t["id"])
         run_ids = [r["id"] for r in manifest["tables"]["runs"]] or [-1]
         manifest["tables"]["results"] = db.q(f"SELECT * FROM results WHERE run_id IN ({','.join(map(str, run_ids))})")
+        manifest["tables"]["geo_answers"] = db.q("SELECT * FROM geo_answers WHERE tenant_id=:t", t=t["id"])
+        seo_dir = settings.DATA_DIR / "seo" / str(t["id"])
+        if seo_dir.is_dir():
+            (work / "seo").mkdir(mode=0o700)
+            for f in seo_dir.iterdir():
+                if f.is_file():
+                    shutil.copy2(f, work / "seo" / f.name)
 
         n = 0
         for role, ds_id in rag["datasets"].items():
@@ -165,6 +175,7 @@ async def import_(path, slug=None):
         try:
             rag, chunk_map = await rebuild_ragflow(m, work, old, slug, created)
             tid = insert_rows(m, slug, rag, chunk_map)
+            restore_seo_files(work, tid)
         except BaseException:
             log("导入失败，正在删掉已经在 RAGFlow 里建好的知识库和助手")
             await engine.deprovision(created)
@@ -274,7 +285,27 @@ def insert_rows(m, slug, rag, chunk_map):
         copy("outreach", tb["outreach"], contact_id=lambda v: contacts[v])
         copy("outreach_cfg", tb["outreach_cfg"], drop_id=False)
         copy("llm_usage", tb["llm_usage"])
+        copy("pilot_events", tb.get("pilot_events", []))
+        copy("seo_cfg", tb.get("seo_cfg", []), drop_id=False)
+        copy("site_hits", tb.get("site_hits", []))
+        copy("seo_audits", tb.get("seo_audits", []))
+        geo = copy("geo_runs", tb.get("geo_runs", []))
+        copy("geo_answers", tb.get("geo_answers", []), run_id=lambda v: geo[v])
+        copy("search_rows", tb.get("search_rows", []))
     return tid
+
+
+def restore_seo_files(work, tid):
+    src = work / "seo"
+    if not src.is_dir():
+        return
+    dst = settings.DATA_DIR / "seo" / str(tid)
+    dst.mkdir(parents=True, exist_ok=True)
+    dst.chmod(0o700)
+    for f in src.iterdir():
+        if f.is_file():
+            shutil.copyfile(f, dst / f.name)
+            (dst / f.name).chmod(0o600)
 
 
 # ---------- remove ----------
@@ -289,8 +320,9 @@ async def remove(slug):
     tid = t["id"]
     db.x("DELETE FROM results WHERE run_id IN (SELECT id FROM runs WHERE tenant_id=:t)", t=tid)
     for name in ["outreach", "contacts", "outreach_cfg", "feedback", "messages", "handoffs", "gaps", "runs", "tests",
-                 "llm_usage", "memberships"]:
+                 "llm_usage", "pilot_events", "geo_answers", "geo_runs", "seo_audits", "site_hits", "search_rows", "seo_cfg", "memberships"]:
         db.x(f"DELETE FROM {name} WHERE tenant_id=:t", t=tid)
+    shutil.rmtree(settings.DATA_DIR / "seo" / str(tid), ignore_errors=True)
     db.x("DELETE FROM tenants WHERE id=:t", t=tid)
     log(f"已删除客户 {slug}（账号保留，只去掉了它在这个客户下的成员身份）")
 

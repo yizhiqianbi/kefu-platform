@@ -17,6 +17,10 @@ auth.py        登录、会话、按客户隔离（tenant_ctx 是唯一的权限
 db.py          表结构（SQLAlchemy Core，默认 SQLite，可换 PostgreSQL）
 engine.py      RAGFlow 封装：开客户时建知识库、问答库和助手
 grading.py     测试题评分；llm.py 调评分模型
+outreach.py    主动跟进：AI 起草私信和邮件
+creators.py    达人名单导入（FastMoss、Kalodata 等导出表）和按达人画像打分
+mailer.py      邮件渠道：SMTP 发信、IMAP 收回复、识别退订
+pilot.py       达人自动运营调度：打分、建联、跟进、收回复、发送
 settings.py    所有配置从环境变量或 .env 读
 calibrate.py   评分器校准：python3 calibrate.py <客户代号>
 seed_muxu.py   一次性迁移脚本，从旧版单客户 muxu.db 导入

@@ -1,0 +1,18 @@
+官网访问统计安装包（Cloudflare Pages）
+
+统计页面浏览、询盘动作（点邮箱 / 电话 / WhatsApp、提交表单）、停留时长，以及搜索引擎和 AI 爬虫的来访。
+不用 cookie，不存 IP：同一个人一天内只算一次（按 日期 + 密钥 + IP + 浏览器 做哈希，第二天换新的）。
+数据存在你们自己的 Cloudflare D1 里，平台用 STATS_KEY 每半小时拉一次；D1 只留 90 天，平台那边有完整记录。
+
+1. 把 functions/ 和 lib/ 放进 Pages 项目根目录；public/k.js 放到网站根目录（和 index.html 同级）。
+   项目里已经有 functions/_middleware.js 的话，要把两份合在一起。
+2. 每个页面 </head> 前加：<script src="/k.js" defer></script>
+   别的按钮也想统计：加 data-k="名字"，例如 <a href="..." data-k="catalog">。
+3. Cloudflare 后台 → Workers 和 Pages → D1 → 新建数据库（如 mysite-stats），
+   Pages 项目 → 设置 → 绑定 → 添加 D1，变量名填 DB。
+   用 wrangler 部署的，可以照 wrangler.example.toml 写在 wrangler.toml 里。表会在第一次访问时自动建。
+4. 在平台「SEO / GEO → 接入和设置」生成统计密钥，填到 Pages 项目 → 设置 → 变量和机密，名字 STATS_KEY，类型选「密钥」。
+   或者：npx wrangler pages secret put STATS_KEY --project-name <项目名>
+5. 项目里有 _routes.json 的话，include 里要有页面路径、/robots.txt、/llms.txt、/sitemap.xml 和 /k/*，参考 _routes.example.json。
+   图片、字体这类静态文件不要放进去，省函数调用次数（免费套餐每天 10 万次）。
+6. 重新部署。打开官网点几下，回平台「官网流量」点「立即同步」。

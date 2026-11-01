@@ -1,0 +1,16 @@
+{
+  "name": "muxu-wa-bridge",
+  "private": true,
+  "type": "module",
+  "description": "WhatsApp 个人号连接：Baileys 登录个人号，收到的私信转给 muxu，muxu 让发的消息发出去",
+  "main": "index.mjs",
+  "scripts": {
+    "start": "node index.mjs"
+  },
+  "dependencies": {
+    "baileys": "7.0.0-rc14",
+    "https-proxy-agent": "^7.0.6",
+    "pino": "^9.6.0",
+    "qrcode": "^1.5.4"
+  }
+}
